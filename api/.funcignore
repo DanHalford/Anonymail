@@ -1,0 +1,9 @@
+*.js.map
+.git*
+.vscode
+local.settings*.json
+test/
+scripts/
+src/
+tsconfig.json
+vitest.config.*

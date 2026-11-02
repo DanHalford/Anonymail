@@ -1,0 +1,23 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "STORAGE_CONNECTION_STRING": "UseDevelopmentStorage=true",
+    "TENANT_ID": "<tenant-guid>",
+    "API_CLIENT_ID": "<app-registration-client-id>",
+    "ALIAS_DOMAINS": "alias.contoso.com",
+    "ELIGIBLE_GROUP_IDS": "",
+    "QUEUE_NAME": "exchange-ops",
+    "WORKER_DISPATCH_ENABLED": "false",
+    "AUTOMATION_ACCOUNT_ID": "",
+    "AUTOMATION_RUNBOOK_NAME": "Invoke-AnonymailWorker",
+    "EXCHANGE_ORGANIZATION": "contoso.onmicrosoft.com",
+    "CREATION_ENABLED": "true",
+    "EXPIRY_SCHEDULE": "0 0 17 * * *",
+    "SWEEP_SCHEDULE": "0 */30 * * * *"
+  },
+  "Host": {
+    "CORS": "http://localhost:5173"
+  }
+}

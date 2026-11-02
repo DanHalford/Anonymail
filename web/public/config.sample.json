@@ -1,0 +1,6 @@
+{
+  "tenantId": "<tenant-guid>",
+  "clientId": "<app-registration-client-id>",
+  "apiBaseUrl": "https://<function-app-host>/api",
+  "apiScope": "api://<app-registration-client-id>/Aliases.Manage"
+}
