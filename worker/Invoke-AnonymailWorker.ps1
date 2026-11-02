@@ -50,8 +50,11 @@ function Get-StorageHeaders([string]$Version) {
     @{ Authorization = "Bearer $script:StorageToken"; 'x-ms-version' = $Version; 'x-ms-date' = [DateTime]::UtcNow.ToString('R') }
 }
 
-function ConvertFrom-QueueXml([string]$Content) {
-    [xml]$xml = $Content.TrimStart([char]0xFEFF)
+function ConvertFrom-QueueXml($Resp) {
+    # The queue service sends UTF-8 with a BOM and no charset, so Windows PowerShell's .Content decodes it
+    # as Latin-1 ("ï»¿<?xml…"). Decode the raw bytes ourselves.
+    $text = [Text.Encoding]::UTF8.GetString($Resp.RawContentStream.ToArray()).TrimStart([char]0xFEFF)
+    [xml]$xml = $text
     @($xml.QueueMessagesList.QueueMessage | Where-Object { $_ })
 }
 
@@ -59,13 +62,13 @@ function Receive-QueueBatch {
     # 300 s visibility: a message we fail to finish reappears for a later attempt.
     $resp = Invoke-WebRequest -UseBasicParsing -Method Get -Headers (Get-StorageHeaders '2023-11-03') `
         -Uri "${QueueBase}?numofmessages=$BatchSize&visibilitytimeout=300"
-    ConvertFrom-QueueXml $resp.Content
+    ConvertFrom-QueueXml $resp
 }
 
 function Test-QueueHasVisible {
     $resp = Invoke-WebRequest -UseBasicParsing -Method Get -Headers (Get-StorageHeaders '2023-11-03') `
         -Uri "${QueueBase}?peekonly=true&numofmessages=1"
-    (ConvertFrom-QueueXml $resp.Content).Count -gt 0
+    @(ConvertFrom-QueueXml $resp).Count -gt 0
 }
 
 function Remove-QueueMessage($Msg) {
@@ -253,7 +256,7 @@ function Invoke-MailboxBatch([string]$UserId, [object[]]$Items) {
 try {
     Set-Lock 'Running'
     while (((Get-Date) - $started).TotalMinutes -lt $MaxRuntimeMinutes) {
-        $messages = Receive-QueueBatch
+        $messages = @(Receive-QueueBatch)
         if ($messages.Count -eq 0) {
             # Release, then re-check once to close the race with a message enqueued just now.
             Set-Lock 'Idle'

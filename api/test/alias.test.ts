@@ -19,13 +19,14 @@ const cfg = loadConfig({
 
 describe('alias naming', () => {
   it('generates valid local parts', () => {
-    for (let i = 0; i < 200; i++) expect(validateLocalPart(generateLocalPart(), cfg)).toMatch(/^[a-z]+-[a-z]+-\d{4}$/);
+    for (let i = 0; i < 200; i++) expect(validateLocalPart(generateLocalPart(), cfg)).toMatch(/^[a-z]+-[a-z]+-\d{2}$/);
   });
   it('recognises accepted suggestions but not look-alikes', () => {
     expect(isGeneratedLocalPart(generateLocalPart())).toBe(true);
-    expect(isGeneratedLocalPart('quiet-otter-4821')).toBe(true);
-    expect(isGeneratedLocalPart('john-smith-1234')).toBe(false);
+    expect(isGeneratedLocalPart('quiet-otter-07')).toBe(true);
+    expect(isGeneratedLocalPart('john-smith-12')).toBe(false);
     expect(isGeneratedLocalPart('quiet-otter-482')).toBe(false);
+    expect(isGeneratedLocalPart('quiet-otter-7')).toBe(false);
   });
   it('rejects reserved and malformed names', () => {
     expect(() => validateLocalPart('postmaster', cfg)).toThrow(/reserved/);

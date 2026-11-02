@@ -3,12 +3,34 @@ import { AppConfig } from './config';
 import { HttpError } from './http';
 
 const ADJECTIVES = [
-  'amber', 'brisk', 'calm', 'dusty', 'eager', 'fuzzy', 'gentle', 'hollow', 'icy', 'jolly', 'keen', 'lucky',
-  'misty', 'nimble', 'olive', 'plain', 'quiet', 'rapid', 'sunny', 'tidy', 'urban', 'vivid', 'witty', 'young',
+  "red", "orange", "yellow", "green", "blue",
+  "purple", "pink", "white", "silver", "golden",
+  "bronze", "copper", "amber", "scarlet", "crimson",
+  "coral", "violet", "indigo", "teal", "turquoise",
+  "swift", "quick", "rapid", "speedy", "agile",
+  "nimble", "steady", "quiet", "silent", "cautious",
+  "curious", "alert", "watchful", "patient", "clever",
+  "bright", "bold", "brave", "calm", "friendly",
+  "gentle", "playful", "lively", "cheerful", "daring",
+  "adventurous", "small", "little", "tall", "strong",
+  "mighty", "fierce", "valiant", "noble", "wise",
+  "honest", "loyal", "kind", "generous",
+  "brilliant", "charming", "diligent", "energetic", "fearless",
 ];
 const NOUNS = [
-  'acorn', 'badger', 'canyon', 'dingo', 'ember', 'falcon', 'gecko', 'harbor', 'island', 'jetty', 'koala', 'lagoon',
-  'meadow', 'nectar', 'otter', 'pebble', 'quokka', 'river', 'summit', 'thistle', 'umbra', 'valley', 'wombat', 'zephyr',
+  "tiger", "panther", "fox", "bear",
+  "rabbit", "owl", "eagle", "falcon", "hawk",
+  "robin", "sparrow", "parrot", "penguin", "puffin",
+  "otter", "beaver", "badger", "deer", "moose",
+  "horse", "pony", "zebra", "giraffe", "elephant",
+  "panda", "koala", "kangaroo", "wallaby", "wombat",
+  "dolphin", "whale", "seal", "turtle", "gecko",
+  "chameleon", "frog", "butterfly", "dragonfly", "beetle",
+  "scout", "ranger", "sailor", "pilot", "climber",
+  "hiker", "runner", "swimmer", "archer", "gardener",
+  "scholar", "artist", "musician", "dancer", "chef",
+  "baker", "writer", "poet", "inventor", "explorer",
+  "captain", "commander", "adventurer", "seeker", "voyager",
 ];
 
 const LOCAL_PART = /^[a-z0-9](?:[a-z0-9._-]{1,62}[a-z0-9])$/;
@@ -16,13 +38,13 @@ const LOCAL_PART = /^[a-z0-9](?:[a-z0-9._-]{1,62}[a-z0-9])$/;
 export function generateLocalPart(): string {
   const a = ADJECTIVES[randomInt(ADJECTIVES.length)];
   const n = NOUNS[randomInt(NOUNS.length)];
-  return `${a}-${n}-${randomInt(1000, 10000)}`;
+  return `${a}-${n}-${String(randomInt(100)).padStart(2, '0')}`;
 }
 
-/** True if the local part has exactly the generator's shape (word list + 4 digits). */
+/** True if the local part has exactly the generator's shape (word list + two digits, 00-99). */
 export function isGeneratedLocalPart(lp: string): boolean {
-  const m = /^([a-z]+)-([a-z]+)-(\d{4})$/.exec(lp);
-  return !!m && ADJECTIVES.includes(m[1]) && NOUNS.includes(m[2]) && Number(m[3]) >= 1000;
+  const m = /^([a-z]+)-([a-z]+)-(\d{2})$/.exec(lp);
+  return !!m && ADJECTIVES.includes(m[1]) && NOUNS.includes(m[2]);
 }
 
 export function validateLocalPart(localPart: string, cfg: AppConfig): string {
