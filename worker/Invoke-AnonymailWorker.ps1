@@ -9,7 +9,10 @@
       * drains the queue in batches, connecting to Exchange Online at most once (lazily, only if
         a message was actually received),
       * groups operations per mailbox and applies them with one Set-Mailbox call where possible,
-      * bounds itself by MaxRuntimeMinutes and MaxAttempts per operation.
+      * bounds itself by MaxRuntimeMinutes and MaxAttempts per operation,
+      * keeps ONE inbox rule per (mailbox, destination folder) whose conditions list every live
+        alias for that folder, so rule count grows with folders rather than aliases and stays
+        inside the mailbox's inbox-rule quota. Rule problems never fail the alias operation.
 
     Aliases are plain secondary SMTP proxy addresses on the owner's mailbox, so mail delivery to
     existing aliases is handled natively by Exchange and does not depend on this service running.
@@ -108,6 +111,21 @@ function Get-Entity([string]$Table, [string]$Pk, [string]$Rk) {
     }
 }
 
+# Returns every entity matching an OData filter, following continuation tokens.
+function Get-Entities([string]$Table, [string]$Filter, [string]$Select) {
+    $base = "$TableBase/$Table()?`$filter=$([uri]::EscapeDataString($Filter))"
+    if ($Select) { $base += "&`$select=$Select" }
+    $rows = @(); $next = ''
+    do {
+        $r = Invoke-WebRequest -UseBasicParsing -Method Get -Uri "$base$next" -Headers (Get-TableHeaders)
+        $rows += @(($r.Content | ConvertFrom-Json).value)
+        $npk = $r.Headers['x-ms-continuation-NextPartitionKey']
+        $nrk = $r.Headers['x-ms-continuation-NextRowKey']
+        $next = if ($npk) { "&NextPartitionKey=$([uri]::EscapeDataString("$npk"))&NextRowKey=$([uri]::EscapeDataString("$nrk"))" } else { '' }
+    } while ($next)
+    $rows
+}
+
 function Remove-Entity([string]$Table, [string]$Pk, [string]$Rk) {
     $h = Get-TableHeaders; $h['If-Match'] = '*'
     try { Invoke-WebRequest -UseBasicParsing -Method Delete -Uri (Get-EntityUri $Table $Pk $Rk) -Headers $h | Out-Null } catch { }
@@ -144,7 +162,7 @@ function Connect-Exo {
     if ($script:ExoConnected) { return }
     Import-Module ExchangeOnlineManagement
     Connect-ExchangeOnline -ManagedIdentity -Organization $Organization -ShowBanner:$false `
-        -CommandName 'Get-Recipient', 'Set-Mailbox' | Out-Null
+        -CommandName 'Get-Recipient', 'Set-Mailbox', 'Get-InboxRule', 'New-InboxRule', 'Set-InboxRule', 'Remove-InboxRule' | Out-Null
     $script:ExoConnected = $true
 }
 
@@ -155,6 +173,83 @@ function Test-AddressInUse([string]$Address) {
     } catch {
         if ("$_" -match "couldn't be found|could not be found|not found") { return $false }
         throw # transient: let the caller retry
+    }
+}
+
+# ------------------------------------------------------------------ folder rules (one per folder)
+# Aliases whose address is still on the mailbox, so their mail still needs sorting.
+$RuleLiveStatuses = @('Active', 'Removing', 'RemoveFailed')
+
+# Brings the folder's rule in line with $Desired (sorted, lower-case addresses). Returns the
+# ruleStatus to record on the folder's aliases.
+function Sync-FolderRule([string]$UserId, $Mbx, [string]$Key, [string]$Path, [string[]]$Desired, [bool]$NewAlias) {
+    $state = Get-Entity 'inboxrules' $UserId $Key
+    $rules = @(Get-InboxRule -Mailbox $UserId -ErrorAction Stop)
+    $rule = $null
+    if ($state) { $rule = $rules | Where-Object { "$($_.RuleIdentity)" -eq "$($state.ruleIdentity)" } | Select-Object -First 1 }
+
+    if ($Desired.Count -eq 0) {
+        # Last alias for this folder has gone: remove the rule rather than leave it behind.
+        if ($rule) { Remove-InboxRule -Mailbox $UserId -Identity "$($rule.RuleIdentity)" -Confirm:$false -ErrorAction Stop }
+        if ($state) { Remove-Entity 'inboxrules' $UserId $Key }
+        return 'Applied'
+    }
+    if ($rule) {
+        $current = @($rule.HeaderContainsWords | ForEach-Object { "$_".ToLowerInvariant() } | Sort-Object)
+        if (($current -join ',') -ne ($Desired -join ',')) {
+            Set-InboxRule -Mailbox $UserId -Identity "$($rule.RuleIdentity)" -HeaderContainsWords $Desired -Force -ErrorAction Stop
+        }
+        return 'Applied'
+    }
+    # We created a rule before and it's gone: the user deleted it in Outlook. Respect that until
+    # they create another alias for this folder, which is a fresh request to sort mail there.
+    if ($state -and -not $NewAlias) { return 'Missing' }
+
+    $leaf = ($Path -split '\\')[-1] # -split takes a regex: this splits on a single backslash
+    $base = "Anonymail - Move to $leaf"
+    $name = $base; $n = 2
+    $names = @($rules | ForEach-Object { "$($_.Name)" })
+    while ($names -contains $name) { $name = "$base ($n)"; $n++ }
+    $new = New-InboxRule -Mailbox $UserId -Name $name -HeaderContainsWords $Desired `
+        -MoveToFolder "$($Mbx.PrimarySmtpAddress):\$Path" -Force -ErrorAction Stop
+    Set-Entity 'inboxrules' $UserId $Key @{ ruleIdentity = "$($new.RuleIdentity)"; ruleName = $name; folderPath = $Path; createdAt = (Now) } -Upsert
+    Write-Audit 'rule.create' $Path 'succeeded' $name
+    'Applied'
+}
+
+# Re-syncs the rule of every folder touched by this batch from the aliases table (the source of
+# truth), so retries and partial failures converge instead of drifting.
+function Sync-FolderRules([string]$UserId, $Mbx, [object[]]$Items) {
+    $rows = @(Get-Entities 'aliases' "PartitionKey eq '$($UserId.Replace("'", "''"))'" 'RowKey,status,folderPath,folderKey,ruleStatus,ruleError')
+    $byAddress = @{}
+    foreach ($r in $rows) { $byAddress[$r.RowKey] = $r }
+    $touched = @{} # folderKey -> whether a newly activated alias targets it
+    foreach ($i in $Items) {
+        $row = $byAddress[$i.Op.address.ToLowerInvariant()]
+        if (-not $row -or -not $row.folderKey) { continue }
+        $isNew = $i.Op.type -eq 'add' -and $row.status -eq 'Active'
+        $touched[$row.folderKey] = [bool]$touched[$row.folderKey] -or $isNew
+    }
+    foreach ($key in @($touched.Keys)) {
+        $members = @($rows | Where-Object { $_.folderKey -eq $key })
+        $live = @($members | Where-Object { $RuleLiveStatuses -contains $_.status })
+        $desired = [string[]]@($live | ForEach-Object { "$($_.RowKey)".ToLowerInvariant() } | Sort-Object)
+        $path = "$(($members | Select-Object -First 1).folderPath)"
+        try {
+            $result = Sync-FolderRule $UserId $Mbx $key $path $desired $touched[$key]
+            $outcome = if ($result -eq 'Missing') {
+                @{ ruleStatus = 'Missing'; ruleError = 'The folder rule was deleted in Outlook, so mail stays in the Inbox.' }
+            } else { @{ ruleStatus = 'Applied'; ruleError = '' } }
+        } catch {
+            $msg = "Folder rule failed: $_"
+            $outcome = @{ ruleStatus = 'Failed'; ruleError = $msg.Substring(0, [Math]::Min(512, $msg.Length)) }
+            Write-Audit 'rule.sync' $path 'failed' "$_"
+        }
+        foreach ($m in $live) {
+            if ("$($m.ruleStatus)" -ne $outcome.ruleStatus -or "$($m.ruleError)" -ne $outcome.ruleError) {
+                try { Set-Entity 'aliases' $UserId $m.RowKey $outcome } catch { Write-Warning "Rule status write failed for $($m.RowKey): $_" }
+            }
+        }
     }
 }
 
@@ -230,8 +325,13 @@ function Invoke-MailboxBatch([string]$UserId, [object[]]$Items) {
         $i | Add-Member -NotePropertyName Proxy -NotePropertyValue $proxy
         $pending += $i
     }
-    if ($pending.Count -eq 0) { return }
+    if ($pending.Count -gt 0) { Set-MailboxAliases $UserId $pending }
 
+    # After the operations have settled, so the aliases table reflects what's on the mailbox.
+    try { Sync-FolderRules $UserId $mbx $Items } catch { Write-Warning "Folder rules skipped for ${UserId}: $_" }
+}
+
+function Set-MailboxAliases([string]$UserId, [object[]]$pending) {
     $adds = @($pending | Where-Object { $_.Op.type -eq 'add' } | ForEach-Object { $_.Proxy })
     $removes = @($pending | Where-Object { $_.Op.type -eq 'remove' } | ForEach-Object { $_.Proxy })
     try {

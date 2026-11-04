@@ -6,8 +6,8 @@
    `login.microsoftonline.com/{tenantId}`. It is a single-tenant app. Entra's own sign-in page
    offers every method the tenant allows, including passkeys.
 2. **API call.** The SPA calls the Function App directly with a v2 access token for
-   `api://{appId}/Aliases.Manage`. CORS allows only the Static Web App hostname. SWA Free can't
-   link a separate backend, so the API is a standalone Function App.
+   `api://{appId}/Aliases.Manage`. CORS allows only the Static Web App hostname and any
+   `CustomDomains`. SWA Free can't link a separate backend, so the API is a standalone Function App.
 3. **The API enforces** these checks on every request (`api/src/lib/auth.ts`, `eligibility.ts`):
    - the token signature, the issuer (this tenant only), the audience and the scope, and that it is a delegated user token, not an app-only one;
    - **tenant membership**: the token's `tid` must match the tenant; Graph must report `userType = Member` and `accountEnabled`;
@@ -18,8 +18,10 @@
    users (mail, UPN, proxy addresses), groups and contacts, in one Graph `$batch` call. The user
    can ask for a new suggestion as often as they like, or type their own name if custom names are
    allowed. Accepted suggestions are allowed even when `ALLOW_CUSTOM_LOCAL_PART=false`.
-5. **Create.** `POST /api/aliases` takes the address and an optional drop-dead `expiresAt`: the end
-   of the chosen day in the user's time zone. The API checks uniqueness **first**. It reserves the
+5. **Create.** `POST /api/aliases` takes the address, an optional drop-dead `expiresAt` (the end
+   of the chosen day in the user's time zone) and an optional destination `folder`.
+   The SPA builds the folder picker by listing the user's own folders from Graph with a delegated
+   `Mail.ReadBasic` token. The API stores the folder path on the alias row. The API checks uniqueness **first**. It reserves the
    address in `aliasindex` (an insert that fails on conflict, so two requests can't both win),
    then re-checks the directory and releases the reservation on a clash. Addresses found in the
    directory are kept as tombstones so they're never suggested again. Only then does it check
@@ -37,10 +39,35 @@
    messages. It connects to Exchange Online once, and only after it has actually received a
    message. It groups operations by mailbox and applies each group with a single
    `Set-Mailbox -EmailAddresses @{Add=…; Remove=…}`. Then it updates the rows and deletes the
-   messages. Before exiting it releases the lock and checks the queue once more. Each job stops
+   messages. Last, it syncs the [folder rules](#folder-rules) for any folders those operations touched. Before exiting it releases the lock and checks the queue once more. Each job stops
    after `MaxRuntimeMinutes`.
 8. **Status.** The SPA polls the alias list only while something is pending *and* the tab is
    visible. It backs off from 3 s to 30 s and stops after 10 minutes (`web/src/poll.ts`).
+
+## Folder rules
+
+When a user picks a destination folder, the worker moves that alias's mail with an inbox rule in
+their mailbox. It keeps **one rule per (mailbox, folder)**, not one per alias. The rule's
+`HeaderContainsWords` condition lists every live alias for that folder. So the number of rules
+grows with the number of folders, not aliases, and stays well inside the mailbox's inbox-rule quota
+(256 KB by default).
+
+- **Source of truth.** After each batch the worker re-reads the user's `aliases` rows. For each
+  folder the batch touched, it sets the rule's address list to the aliases still on the mailbox
+  (`Active`, `Removing` or `RemoveFailed`). Retries and partial failures converge on the right list.
+- **Creation.** The first alias for a folder creates a rule named `Anonymail - Move to {folder}`
+  (with ` (2)`, ` (3)` … added if the user already has a rule with that name). Its `RuleIdentity`
+  is stored in `inboxrules`, so a rule the user renames is still found.
+- **Removal.** When the last alias for a folder goes, through removal or expiry, the rule is deleted.
+- **User changes are respected.** If the user deletes the rule in Outlook, the worker doesn't
+  recreate it on later removals. Those aliases show `ruleStatus = Missing`. Creating a new alias for
+  that folder counts as a fresh request, so a new rule is created then. Edits to other parts of
+  the rule (actions, enabled state) are left alone; only the address list is rewritten.
+- **Failures never fail the alias.** A rule error sets `ruleStatus = Failed` and `ruleError` on the
+  folder's aliases, which the SPA shows. The next operation for that folder retries the sync.
+  The usual cause is a folder that was renamed or deleted between choosing it and the worker
+  running.
+- **No extra jobs.** Rules are synced in the same worker job that adds or removes the address.
 
 ## Scheduled work
 
@@ -66,6 +93,7 @@ touches a mailbox.
 | `usage` | `user:{oid}` or `global` / counter | Quotas and the monthly count of worker jobs (ETag counters) |
 | `state` | `worker` / `lock` | Single-worker lock and heartbeat |
 | `audit` | `yyyymm` / inverted ticks | Audit trail (`AUDIT_RETENTION_DAYS`, default 365) |
+| `inboxrules` | user oid / folder key (hash of the lower-cased path) | The worker-managed inbox rule for each folder: `ruleIdentity`, `ruleName`, `folderPath` |
 
 ## Bounded behaviour
 
@@ -96,5 +124,8 @@ touches a mailbox.
 - Replies are sent from the user's primary address unless the tenant enables
   [sending from aliases](https://learn.microsoft.com/exchange/recipients-in-exchange-online/manage-user-mailboxes/add-or-remove-email-addresses).
   Sending from aliases isn't configured by this scaffold.
+- Folder rules match on message headers. Mail that reaches an alias without the alias appearing
+  in any header (for example as a Bcc, or through some mailing lists) stays in the Inbox.
+- An alias's folder is chosen when it's created and can't be changed in the SPA yet.
 - Exchange Online caps proxy addresses per recipient. The default `MAX_ACTIVE_ALIASES_PER_USER` of
   100 stays well under that cap.

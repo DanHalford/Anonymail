@@ -3,6 +3,7 @@ import { expiryBucket, generateLocalPart, isGeneratedLocalPart, resolveExpiry, v
 import { claimsToCaller } from '../src/lib/auth';
 import { loadConfig } from '../src/lib/config';
 import { lockIsActive } from '../src/lib/dispatcher';
+import { folderKey, resolveFolder } from '../src/lib/folder';
 
 const TENANT = '11111111-1111-1111-1111-111111111111';
 const CLIENT = '22222222-2222-2222-2222-222222222222';
@@ -82,5 +83,28 @@ describe('worker lock', () => {
     expect(lockIsActive({ status: 'Idle', updatedAt: '2026-11-02T00:29:00Z' }, 20, now)).toBe(false);
     expect(lockIsActive({ status: 'Running', updatedAt: '2026-11-02T00:00:00Z' }, 20, now)).toBe(false);
     expect(lockIsActive({ status: 'Running', updatedAt: '2026-11-02T00:25:00Z' }, 20, now)).toBe(true);
+  });
+});
+
+describe('folder targets', () => {
+  it('treats no folder as "leave in the Inbox"', () => {
+    expect(resolveFolder(undefined)).toBeUndefined();
+    expect(resolveFolder(null)).toBeUndefined();
+    expect(resolveFolder([])).toBeUndefined();
+  });
+  it('builds the Exchange path, leaf name and a case-insensitive key', () => {
+    const f = resolveFolder(['Inbox', 'Shopping'])!;
+    expect(f.path).toBe('Inbox\\Shopping');
+    expect(f.name).toBe('Shopping');
+    expect(f.key).toBe(folderKey('inbox\\shopping'));
+    expect(f.key).toMatch(/^[0-9a-f]{32}$/);
+  });
+  it('keeps folder names exactly as Exchange has them', () => {
+    expect(resolveFolder([' Receipts '])!.path).toBe(' Receipts ');
+  });
+  it('rejects malformed folders', () => {
+    for (const bad of ['Inbox', [''], ['  '], ['a\\b'], ['tab\there'], [42], Array(11).fill('x'), ['x'.repeat(256)]]) {
+      expect(() => resolveFolder(bad), JSON.stringify(bad)).toThrow();
+    }
   });
 });

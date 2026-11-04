@@ -1,5 +1,7 @@
 import { AccountInfo, InteractionRequiredAuthError, PublicClientApplication } from '@azure/msal-browser';
 
+const GRAPH_MAIL_READ_BASIC = 'https://graph.microsoft.com/Mail.ReadBasic';
+
 export interface RuntimeConfig {
   tenantId: string;
   clientId: string;
@@ -41,6 +43,18 @@ export class Auth {
 
   signOut(): Promise<void> {
     return this.msal.logoutRedirect({ account: this.account ?? undefined });
+  }
+
+  /** Delegated Graph token for listing the user's own mail folders (admin-consented, so normally silent). */
+  async graphToken(): Promise<string> {
+    const account = this.account;
+    if (!account) throw new Error('Not signed in');
+    return (await this.msal.acquireTokenSilent({ scopes: [GRAPH_MAIL_READ_BASIC], account })).accessToken;
+  }
+
+  /** Interactive fallback when graphToken() needs consent or a fresh sign-in. */
+  consentGraph(): Promise<void> {
+    return this.msal.acquireTokenRedirect({ scopes: [GRAPH_MAIL_READ_BASIC], account: this.account ?? undefined });
   }
 
   async token(): Promise<string> {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { expiryBucket, generateLocalPart, isGeneratedLocalPart, resolveExpiry, validateDomain, validateLocalPart } from './alias';
 import { audit } from './audit';
+import { resolveFolder } from './folder';
 import { Caller } from './auth';
 import { AppConfig } from './config';
 import { creationSuspendedByJobBudget } from './dispatcher';
@@ -10,6 +11,9 @@ import { counters, decrement, tryIncrement } from './quota';
 import { T, getEntityOrUndefined, isStatus, odata, opsQueue, table } from './storage';
 
 export type AliasStatus = 'Pending' | 'Active' | 'Removing' | 'Removed' | 'Failed' | 'RemoveFailed';
+/** State of the per-folder inbox rule for this alias (only set when a folder was chosen). */
+/** Missing = the user deleted the rule in Outlook; it's recreated only when they add another alias for that folder. */
+export type RuleStatus = 'Pending' | 'Applied' | 'Failed' | 'Missing';
 export type OperationStatus = 'Queued' | 'Retrying' | 'Succeeded' | 'Failed';
 
 export interface AliasRecord {
@@ -23,6 +27,12 @@ export interface AliasRecord {
   removedAt?: string;
   lastOperationId?: string;
   lastError?: string;
+  /** Destination folder path ('Inbox\\Shopping'); mail to the alias is moved there by an inbox rule. */
+  folderPath?: string;
+  /** folderKey(folderPath): groups aliases that share one inbox rule. */
+  folderKey?: string;
+  ruleStatus?: RuleStatus;
+  ruleError?: string;
 }
 
 /** Message placed on the exchange-ops queue and consumed by worker/Invoke-AnonymailWorker.ps1. */
@@ -47,12 +57,13 @@ export async function listAliases(userId: string): Promise<AliasRecord[]> {
 }
 
 function strip<E extends AliasRecord>(e: E): AliasRecord {
-  const { address, domain, note, status, createdAt, expiresAt, activatedAt, removedAt, lastOperationId, lastError } = e;
-  return { address, domain, note, status, createdAt, expiresAt, activatedAt, removedAt, lastOperationId, lastError };
+  const { address, domain, note, status, createdAt, expiresAt, activatedAt, removedAt, lastOperationId, lastError, folderPath, folderKey, ruleStatus, ruleError } = e;
+  return { address, domain, note, status, createdAt, expiresAt, activatedAt, removedAt, lastOperationId, lastError, folderPath, folderKey, ruleStatus, ruleError };
 }
 
 /** expiresAt: drop-dead instant (ISO 8601 with offset); omit for "never" (subject to MAX_ALIAS_LIFETIME_DAYS). */
-export interface CreateRequest { domain?: string; localPart?: string; note?: string; expiresAt?: string }
+/** folder: path segments from the mailbox root (e.g. ['Inbox', 'Shopping']); omit to leave mail in the Inbox. */
+export interface CreateRequest { domain?: string; localPart?: string; note?: string; expiresAt?: string; folder?: string[] }
 
 export async function createAlias(caller: Caller, body: CreateRequest, cfg: AppConfig): Promise<{ alias: AliasRecord; operationId: string }> {
   if (!cfg.creationEnabled) throw new HttpError(503, 'creation_suspended', 'New aliases are temporarily unavailable. Existing aliases keep working.');
@@ -68,6 +79,8 @@ export async function createAlias(caller: Caller, body: CreateRequest, cfg: AppC
   if (custom && !cfg.allowCustomLocalPart) throw new HttpError(400, 'custom_not_allowed', 'Custom alias names are disabled.');
   const note = body.note?.trim().slice(0, 200) || undefined;
   const expiresAt = resolveExpiry(body.expiresAt, cfg);
+  const folder = resolveFolder(body.folder);
+  if (folder && !cfg.allowFolderRules) throw new HttpError(400, 'folder_rules_disabled', 'Moving alias mail to a folder is disabled.');
 
   const existing = await listAliases(caller.userId);
   if (existing.filter((a) => LIVE.includes(a.status)).length >= cfg.maxActiveAliasesPerUser) {
@@ -103,13 +116,16 @@ export async function createAlias(caller: Caller, body: CreateRequest, cfg: AppC
 
   const now = new Date().toISOString();
   const opId = randomUUID();
-  const alias: AliasRecord = { address, domain, note, status: 'Pending', createdAt: now, expiresAt, lastOperationId: opId };
+  const alias: AliasRecord = {
+    address, domain, note, status: 'Pending', createdAt: now, expiresAt, lastOperationId: opId,
+    ...(folder ? { folderPath: folder.path, folderKey: folder.key, ruleStatus: 'Pending' as const } : {}),
+  };
   await (await table(T.aliases)).createEntity({ partitionKey: caller.userId, rowKey: address, ...alias });
   if (expiresAt) {
     await (await table(T.expiry)).upsertEntity({ partitionKey: expiryBucket(expiresAt), rowKey: address, userId: caller.userId, expiresAt });
   }
   await enqueue({ opId, userId: caller.userId, type: 'add', address, reason: 'user', requestedAt: now });
-  await audit({ actor: caller.userId, action: 'alias.create.requested', target: address, outcome: 'accepted' });
+  await audit({ actor: caller.userId, action: 'alias.create.requested', target: address, outcome: 'accepted', detail: folder ? `folder=${folder.path}` : undefined });
   return { alias, operationId: opId };
 }
 

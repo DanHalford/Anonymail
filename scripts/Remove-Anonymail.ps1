@@ -7,6 +7,7 @@
     IMPORTANT: aliases are ordinary secondary SMTP addresses on users' mailboxes. Removing the
     service does NOT remove them, so mail to existing aliases keeps being delivered. To also strip
     every alias the service created, pass -RemoveAliasesFromMailboxes (runs BEFORE the data is deleted).
+    That switch also deletes the "Anonymail - Move to ..." inbox rules the worker created.
 .EXAMPLE   ./Remove-Anonymail.ps1 -RemoveAliasesFromMailboxes
 #>
 [CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
@@ -27,6 +28,14 @@ try {
             if ($PSCmdlet.ShouldProcess("$($r.PartitionKey)", "remove smtp:$($r.RowKey)")) {
                 Set-Mailbox -Identity $r.PartitionKey -EmailAddresses @{ Remove = "smtp:$($r.RowKey)" }
                 Write-Ok $r.RowKey
+            }
+        }
+        Write-Step 'Removing Anonymail folder rules from mailboxes'
+        $rules = Invoke-Az storage entity query --account-name $state.storageAccountName --table-name inboxrules --auth-mode login --num-results 5000
+        foreach ($r in $rules.items) {
+            if ($PSCmdlet.ShouldProcess("$($r.PartitionKey)", "remove inbox rule '$($r.ruleName)'")) {
+                Remove-InboxRule -Mailbox $r.PartitionKey -Identity $r.ruleIdentity -Confirm:$false -ErrorAction SilentlyContinue
+                Write-Ok "$($r.ruleName) ($($r.PartitionKey))"
             }
         }
     }

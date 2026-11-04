@@ -12,6 +12,11 @@ function Get-DeployConfig([string]$Path = (Join-Path $PSScriptRoot 'deploy.confi
     Import-PowerShellDataFile $Path
 }
 
+# https:// origins for the CustomDomains config key (absent or empty in older configs).
+function Get-CustomOrigins($Cfg) {
+    @($Cfg.CustomDomains | Where-Object { $_ } | ForEach-Object { 'https://' + $_.Trim().TrimEnd('/') })
+}
+
 function Get-DeployState {
     if (Test-Path $script:StatePath) { Get-Content $script:StatePath -Raw | ConvertFrom-Json -AsHashtable } else { @{} }
 }

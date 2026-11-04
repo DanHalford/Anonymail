@@ -85,7 +85,8 @@ It then adds the SWA hostname to the app registration's redirect URIs.
 | Function App managed identity | *Automation Operator* on the Automation account (set by Bicep) | Start worker jobs |
 | Function App managed identity | Storage Blob/Queue/Table data roles (set by Bicep) | Host storage, queue, tables |
 | Automation managed identity | Exchange `Exchange.ManageAsApp` (application) | App-only Exchange Online PowerShell |
-| Automation managed identity | Exchange role group **Anonymail Worker** (Mail Recipients, custom write scope), or Entra *Exchange Recipient Administrator* | Add/remove proxy addresses |
+| Automation managed identity | Exchange role group **Anonymail Worker** (Mail Recipients, custom write scope), or Entra *Exchange Recipient Administrator* | Add/remove proxy addresses; create, update and remove the per-folder inbox rules |
+| Anonymail app registration (SPA) | Graph `Mail.ReadBasic` (delegated, admin-consented) | Lists the signed-in user's own mail folders for the "Deliver to" picker. Folder names only, never message content. |
 | Automation managed identity | Storage Queue Data Message Processor and Table Data Contributor (set by Bicep) | Drain queue, update status |
 
 Exchange role assignments can take up to an hour to apply.

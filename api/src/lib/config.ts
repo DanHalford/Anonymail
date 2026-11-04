@@ -13,6 +13,7 @@ export interface AppConfig {
   workerDispatchEnabled: boolean;
   creationEnabled: boolean;
   allowCustomLocalPart: boolean;
+  allowFolderRules: boolean; // users may have alias mail moved to a folder (worker-managed inbox rules)
   maxActiveAliasesPerUser: number;
   maxCreationsPerUserPerDay: number;
   maxCreationsPerMonth: number;
@@ -73,6 +74,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     workerDispatchEnabled,
     creationEnabled: bool(env, 'CREATION_ENABLED', true),
     allowCustomLocalPart: bool(env, 'ALLOW_CUSTOM_LOCAL_PART', true),
+    allowFolderRules: bool(env, 'ALLOW_FOLDER_RULES', true),
     maxActiveAliasesPerUser: int(env, 'MAX_ACTIVE_ALIASES_PER_USER', 100),
     maxCreationsPerUserPerDay: int(env, 'MAX_CREATIONS_PER_USER_PER_DAY', 10),
     maxCreationsPerMonth: int(env, 'MAX_CREATIONS_PER_MONTH', 300),

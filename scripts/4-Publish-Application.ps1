@@ -49,5 +49,5 @@ if (-not $SkipWeb) {
         npx --yes @azure/static-web-apps-cli@2 deploy ./dist --deployment-token $token --env production
         if ($LASTEXITCODE) { throw 'SWA deploy failed' }
     } finally { Pop-Location }
-    Write-Ok "Web published: https://$($state.staticWebAppHostname)"
+    foreach ($u in @("https://$($state.staticWebAppHostname)") + (Get-CustomOrigins $cfg)) { Write-Ok "Web published: $u" }
 }

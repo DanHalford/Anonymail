@@ -10,6 +10,7 @@
 | `MAX_CREATIONS_PER_MONTH` | 300 | Organisation-wide |
 | `MAX_ALIAS_LIFETIME_DAYS` | 0 | Latest expiry date a user may pick, in days from today. 0 allows "never expires". With a value set, an expiry date is required and defaults to the latest allowed. |
 | `ALLOW_CUSTOM_LOCAL_PART` | `true` | `false` allows only random, uniqueness-checked suggestions |
+| `ALLOW_FOLDER_RULES` | `true` | `false` hides the "Deliver to" folder picker and rejects new folder choices. Existing folder rules keep working and are still cleaned up when their aliases are removed. |
 | `RESERVED_LOCAL_PARTS` | — | Comma-separated, added to the built-in list (postmaster, abuse, …) |
 | `WORKER_JOBS_SOFT_LIMIT_PER_MONTH` | 200 | At this count, creation pauses until next month |
 | `WORKER_JOBS_HARD_LIMIT_PER_MONTH` | 250 | At this count, no more Automation jobs start. Operations stay queued. |

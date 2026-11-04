@@ -35,6 +35,7 @@ app.http('me', {
       reason: rec.reason,
       domains: cfg.aliasDomains,
       allowCustomLocalPart: cfg.allowCustomLocalPart,
+      allowFolderRules: cfg.allowFolderRules,
       maxAliasLifetimeDays: cfg.maxAliasLifetimeDays,
       creationEnabled: !suspended,
       quotas: {

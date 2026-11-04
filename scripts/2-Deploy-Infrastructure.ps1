@@ -28,6 +28,7 @@ $params = @{
         exchangeOrganization        = @{ value = $cfg.ExchangeOrganization }
         aliasDomains                = @{ value = ($cfg.AliasDomains -join ',') }
         eligibleGroupIds            = @{ value = ($cfg.EligibleGroupIds -join ',') }
+        customDomainOrigins         = @{ value = @(Get-CustomOrigins $cfg) }
         devCorsOrigins              = @{ value = @($cfg.DevOrigins) }
         creationEnabled             = @{ value = [bool]$l.CreationEnabled }
         maxActiveAliasesPerUser     = @{ value = $l.MaxActiveAliasesPerUser }
@@ -71,6 +72,6 @@ Write-Ok "Storage:        $($state.storageAccountName) — Standard_LRS"
 Write-Ok "Automation:     $($state.automationAccountName) — Basic (pay per job minute; 500 free min/subscription/month)"
 Write-Ok "Budget alert:   $($cfg.BudgetAmount)/month -> $($cfg.BudgetContactEmails -join ', ') (alerts do NOT cap spending)"
 
-Write-Step 'Adding production redirect URI to the app registration'
+Write-Step 'Adding production redirect URIs to the app registration'
 & "$PSScriptRoot/1-Register-EntraApp.ps1" @PSBoundParameters | Out-Null
-Write-Ok "https://$($state.staticWebAppHostname)/"
+foreach ($u in @("https://$($state.staticWebAppHostname)") + (Get-CustomOrigins $cfg)) { Write-Ok "$u/" }

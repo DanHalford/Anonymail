@@ -3,7 +3,9 @@
 .DESCRIPTION
     * Single tenant (AzureADMyOrg) — only your organisation's users can obtain tokens.
     * Exposes delegated scope Aliases.Manage; v2 access tokens; security-group claims.
-    * SPA redirect URIs: the Static Web App hostname (after step 2) plus any DevOrigins.
+    * SPA redirect URIs: the Static Web App hostname (after step 2) plus any CustomDomains and DevOrigins.
+    * Requests delegated Graph User.Read (sign-in) and Mail.ReadBasic (the SPA lists the signed-in
+      user's own mail folders for the "Deliver to" picker; it can't read message content).
     * Grants tenant-wide admin consent so users are not prompted.
     No Entra ID P1/P2 feature is used. Re-run after step 2 to add the production redirect URI
     (step 2 does this automatically).
@@ -26,7 +28,7 @@ $scopeId = if ($scope) { $scope.id } else { [guid]::NewGuid().ToString() }
 
 $redirects = [System.Collections.Generic.List[string]]::new()
 if ($state.staticWebAppHostname) { $redirects.Add("https://$($state.staticWebAppHostname)/") }
-foreach ($o in $cfg.DevOrigins) { $redirects.Add($o.TrimEnd('/') + '/') }
+foreach ($o in @(Get-CustomOrigins $cfg) + @($cfg.DevOrigins | Where-Object { $_ })) { $redirects.Add($o.TrimEnd('/') + '/') }
 
 Invoke-Graph PATCH "/applications/$($app.id)" @{
     identifierUris        = @("api://$($app.appId)")
@@ -44,12 +46,16 @@ Invoke-Graph PATCH "/applications/$($app.id)" @{
     }
 } | Out-Null
 
-# Second PATCH: the app requests its own scope (+ Graph User.Read for sign-in).
-$userRead = (Invoke-Graph GET "/servicePrincipals(appId='$GraphAppId')?`$select=oauth2PermissionScopes").oauth2PermissionScopes |
-    Where-Object { $_.value -eq 'User.Read' }
+# Second PATCH: the app requests its own scope (+ Graph User.Read for sign-in, Mail.ReadBasic for the folder picker).
+$graphScopes = (Invoke-Graph GET "/servicePrincipals(appId='$GraphAppId')?`$select=oauth2PermissionScopes").oauth2PermissionScopes
+$graphAccess = foreach ($name in 'User.Read', 'Mail.ReadBasic') {
+    $s = $graphScopes | Where-Object { $_.value -eq $name }
+    if (-not $s) { throw "Graph delegated permission $name not found" }
+    @{ id = $s.id; type = 'Scope' }
+}
 Invoke-Graph PATCH "/applications/$($app.id)" @{
     requiredResourceAccess = @(
-        @{ resourceAppId = $GraphAppId; resourceAccess = @(@{ id = $userRead.id; type = 'Scope' }) }
+        @{ resourceAppId = $GraphAppId; resourceAccess = @($graphAccess) }
         @{ resourceAppId = $app.appId; resourceAccess = @(@{ id = $scopeId; type = 'Scope' }) }
     )
 } | Out-Null

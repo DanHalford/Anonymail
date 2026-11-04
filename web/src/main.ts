@@ -1,5 +1,7 @@
 import { Alias, Api, ApiError, Me } from './api';
+import { InteractionRequiredAuthError } from '@azure/msal-browser';
 import { Auth, RuntimeConfig } from './auth';
+import { MailFolder, listMailFolders } from './folders';
 import { StatusPoller } from './poll';
 
 type Child = Node | string | null | undefined | false;
@@ -18,8 +20,11 @@ function h(tag: string, attrs: Record<string, string | ((e: Event) => void)> = {
 const app = document.getElementById('app')!;
 const accountBox = document.getElementById('account')!;
 const PENDING = new Set(['Pending', 'Removing']);
+// Keep polling until a new alias's folder rule has been applied too (same worker pass, moments later).
+const busy = (a: Alias) => PENDING.has(a.status) || (a.status === 'Active' && a.ruleStatus === 'Pending');
 
 let api: Api;
+let auth: Auth;
 let me: Me;
 let aliases: Alias[] = [];
 let message: { kind: 'error' | 'info'; text: string } | undefined;
@@ -33,7 +38,24 @@ interface Draft {
   customName: string;
   note: string;
   expiresOn: string; // yyyy-mm-dd in the user's time zone; '' = never
+  folder: string; // index into folders, '' = leave in the Inbox
   busy: boolean;
+}
+
+/** The user's mail folders for the "Deliver to" picker; loaded once per page. */
+type FolderState = { kind: 'idle' | 'loading' | 'consent' } | { kind: 'error'; message: string } | { kind: 'ready'; list: MailFolder[] };
+let folders: FolderState = { kind: 'idle' };
+
+async function loadFolders() {
+  if (folders.kind === 'loading' || folders.kind === 'ready') return;
+  folders = { kind: 'loading' };
+  renderForm();
+  try {
+    folders = { kind: 'ready', list: await listMailFolders(await auth.graphToken()) };
+  } catch (err) {
+    folders = err instanceof InteractionRequiredAuthError ? { kind: 'consent' } : { kind: 'error', message: (err as Error).message };
+  }
+  renderForm();
 }
 let draft: Draft | undefined;
 let suggestSeq = 0;
@@ -46,7 +68,7 @@ const listEl = h('div');
 const poller = new StatusPoller(async () => {
   aliases = await api.list();
   renderList();
-  return aliases.some((a) => PENDING.has(a.status));
+  return aliases.some(busy);
 });
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -84,7 +106,7 @@ function setMessage(kind: 'error' | 'info', text: string) {
 
 async function boot() {
   const cfg = (await fetch('/config.json', { cache: 'no-cache' }).then((r) => r.json())) as RuntimeConfig;
-  const auth = await Auth.create(cfg);
+  auth = await Auth.create(cfg);
   if (!auth.account) {
     app.replaceChildren(
       h('section', { class: 'card' },
@@ -109,7 +131,7 @@ async function refresh() {
   if (!app.contains(formEl)) app.replaceChildren(bannerEl, formEl, listEl);
   const firstLoad = !draft;
   draft ??= {
-    domain: me.domains[0], suggesting: false, custom: false, customName: '', note: '', busy: false,
+    domain: me.domains[0], suggesting: false, custom: false, customName: '', note: '', folder: '', busy: false,
     // With a maximum lifetime configured there is no "never": default to the latest allowed date.
     expiresOn: me.maxAliasLifetimeDays > 0 ? localDate(addDays(me.maxAliasLifetimeDays - 1)) : '',
   };
@@ -117,7 +139,8 @@ async function refresh() {
   renderForm();
   renderList();
   if (firstLoad && me.creationEnabled) void newSuggestion();
-  if (aliases.some((a) => PENDING.has(a.status))) poller.start();
+  if (firstLoad && me.creationEnabled && me.allowFolderRules) void loadFolders();
+  if (aliases.some(busy)) poller.start();
 }
 
 function renderBanner() {
@@ -176,6 +199,27 @@ function renderForm() {
   }) as HTMLInputElement;
   expires.value = d.expiresOn;
 
+  let folderRow: HTMLElement | null = null;
+  if (me.allowFolderRules) {
+    let control: HTMLElement;
+    if (folders.kind === 'ready') {
+      const select = h('select', { name: 'folder', onchange: () => { d.folder = select.value; } },
+        h('option', { value: '' }, "Inbox (don't move)"),
+        ...folders.list.map((f, i) => h('option', { value: String(i) }, f.label))) as HTMLSelectElement;
+      select.value = d.folder;
+      control = select;
+    } else if (folders.kind === 'consent') {
+      control = h('button', { type: 'button', class: 'secondary', onclick: () => void auth.consentGraph() }, 'Allow access to my folder list');
+    } else if (folders.kind === 'error') {
+      control = h('span', { class: 'error-text' }, folders.message);
+    } else {
+      control = h('span', { class: 'muted' }, 'Loading your folders…');
+    }
+    folderRow = h('div', { class: 'row' },
+      h('label', {}, 'Deliver to', control,
+        h('span', { class: 'hint' }, 'Mail to this alias is moved to the folder by an "Anonymail - Move to …" rule in your mailbox.')));
+  }
+
   const canSubmit = d.custom ? true : !!d.suggestion;
   const submit = h('button', { type: 'submit' }, d.busy ? 'Creating…' : 'Create alias') as HTMLButtonElement;
   submit.disabled = d.busy || !canSubmit;
@@ -186,6 +230,7 @@ function renderForm() {
       e.preventDefault();
       const localPart = d.custom ? d.customName.trim() : d.suggestion;
       if (!localPart) return setMessage('error', d.custom ? 'Enter a name, or use a random address.' : 'Wait for a suggestion.');
+      const folder = folders.kind === 'ready' && d.folder !== '' ? folders.list[Number(d.folder)]?.path : undefined;
       d.busy = true;
       renderForm();
       try {
@@ -194,6 +239,7 @@ function renderForm() {
           localPart,
           note: d.note.trim() || undefined,
           expiresAt: d.expiresOn ? endOfDayIso(d.expiresOn) : undefined,
+          folder,
         });
         const until = res.alias.expiresAt ? ` It stops working after ${new Date(res.alias.expiresAt).toLocaleDateString()}.` : '';
         setMessage('info', `${res.alias.address} is being set up. It usually works within a few minutes.${until}`);
@@ -218,6 +264,7 @@ function renderForm() {
       h('label', {}, 'Note', note),
       h('label', {}, capped ? 'Expires on' : 'Expires on (leave blank for never)', expires,
         h('span', { class: 'hint' }, 'Stops working after the end of this day; removed overnight.'))),
+    folderRow,
     submit));
 }
 
@@ -229,7 +276,8 @@ function renderAlias(a: Alias): HTMLElement {
       h('span', { class: 'badge' }, a.status),
       a.note ? h('div', { class: 'muted' }, a.note) : null,
       a.expiresAt ? h('div', { class: 'muted' }, `Expires ${new Date(a.expiresAt).toLocaleDateString()}`) : null,
-      a.lastError ? h('div', { class: 'error-text' }, a.lastError) : null),
+      a.lastError ? h('div', { class: 'error-text' }, a.lastError) : null,
+      renderFolder(a)),
     h('div', { class: 'actions' },
       a.status === 'Active' ? h('button', { class: 'link', onclick: () => navigator.clipboard.writeText(a.address) }, 'Copy') : null,
       canRemove ? h('button', {
@@ -245,6 +293,16 @@ function renderAlias(a: Alias): HTMLElement {
           }
         },
       }, 'Remove') : null));
+}
+
+/** Destination folder and the state of its inbox rule, while the alias is (or is becoming) live. */
+function renderFolder(a: Alias): HTMLElement | null {
+  if (!a.folderPath || a.status === 'Removed' || a.status === 'Failed') return null;
+  const where = `Moved to ${a.folderPath.split('\\').join(' › ')}`;
+  if (a.ruleStatus === 'Failed' || a.ruleStatus === 'Missing') {
+    return h('div', { class: a.ruleStatus === 'Failed' ? 'error-text' : 'muted' }, `${where}: ${a.ruleError ?? 'rule not applied'}`);
+  }
+  return h('div', { class: 'muted' }, a.ruleStatus === 'Applied' ? where : `${where} (setting up the rule…)`);
 }
 
 boot().catch((err) => {

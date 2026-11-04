@@ -40,6 +40,10 @@
         LogDailyCapGb                 = '0.025'  # Log Analytics requires > 0.023
     }
 
+    # Custom hostnames bound to the Static Web App, e.g. 'anonymail.contoso.com'. Each is added to the
+    # API's CORS origins and the app registration's redirect URIs alongside the default SWA hostname.
+    CustomDomains        = @()
+
     # Add http://localhost:5173 while developing; leave empty in production.
     DevOrigins           = @()
 }

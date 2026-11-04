@@ -11,6 +11,10 @@ export interface Alias {
   expiresAt?: string;
   lastOperationId?: string;
   lastError?: string;
+  /** Destination folder ('Inbox\Shopping'); a worker-managed inbox rule moves the alias's mail there. */
+  folderPath?: string;
+  ruleStatus?: 'Pending' | 'Applied' | 'Failed' | 'Missing';
+  ruleError?: string;
 }
 
 export interface Me {
@@ -19,6 +23,7 @@ export interface Me {
   reason?: string;
   domains: string[];
   allowCustomLocalPart: boolean;
+  allowFolderRules: boolean;
   maxAliasLifetimeDays: number;
   creationEnabled: boolean;
   quotas: { active: number; activeMax: number; today: number; todayMax: number };
@@ -54,8 +59,8 @@ export class Api {
   list = () => this.call<{ aliases: Alias[] }>('GET', '/aliases').then((r) => r.aliases);
   suggest = (domain: string) =>
     this.call<{ localPart: string; domain: string; address: string }>('GET', `/aliases/suggestion?domain=${encodeURIComponent(domain)}`);
-  /** expiresAt: ISO 8601 instant with offset; omit for "never". */
-  create = (req: { domain: string; localPart?: string; note?: string; expiresAt?: string }) =>
+  /** expiresAt: ISO 8601 instant with offset; omit for "never". folder: path segments from the mailbox root. */
+  create = (req: { domain: string; localPart?: string; note?: string; expiresAt?: string; folder?: string[] }) =>
     this.call<{ alias: Alias; operationId: string }>('POST', '/aliases', req);
   remove = (address: string) => this.call<{ operationId: string }>('DELETE', `/aliases/${encodeURIComponent(address)}`);
   operation = (id: string) => this.call<Operation>('GET', `/operations/${encodeURIComponent(id)}`);

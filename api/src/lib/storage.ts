@@ -13,6 +13,7 @@ export const T = {
   usage: 'usage', // quota counters
   state: 'state', // worker lock
   audit: 'audit', // PK = yyyymm, RK = inverted ticks + id
+  inboxRules: 'inboxrules', // PK = user object id, RK = folderKey  -> one worker-managed inbox rule per folder
 } as const;
 export type TableName = (typeof T)[keyof typeof T];
 

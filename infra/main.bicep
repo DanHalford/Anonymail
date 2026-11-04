@@ -31,6 +31,9 @@ param aliasDomains string
 @description('Comma-separated Entra security group object IDs whose members may use the service. Empty = all member users with a mailbox.')
 param eligibleGroupIds string = ''
 
+@description('Origins of custom domains bound to the Static Web App, e.g. https://anonymail.contoso.com.')
+param customDomainOrigins array = []
+
 @description('Extra CORS origins for local development, e.g. http://localhost:5173. Empty for production.')
 param devCorsOrigins array = []
 
@@ -69,7 +72,7 @@ var suffix = take(uniqueString(resourceGroup().id), 6)
 var storageName = toLower('${namePrefix}${suffix}st')
 var queueName = 'exchange-ops'
 var runbookName = 'Invoke-AnonymailWorker'
-var tableNames = [ 'aliases', 'aliasindex', 'expiry', 'operations', 'mailboxes', 'usage', 'state', 'audit' ]
+var tableNames = [ 'aliases', 'aliasindex', 'expiry', 'operations', 'mailboxes', 'usage', 'state', 'audit', 'inboxrules' ]
 var tags = { app: 'anonymail', costTarget: 'AUD5-month' }
 
 // ---------------------------------------------------------------- storage (Standard LRS)
@@ -227,7 +230,7 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
       minTlsVersion: '1.2'
       ftpsState: 'Disabled'
       cors: {
-        allowedOrigins: concat([ 'https://${staticSite.properties.defaultHostname}' ], devCorsOrigins)
+        allowedOrigins: concat([ 'https://${staticSite.properties.defaultHostname}' ], customDomainOrigins, devCorsOrigins)
         supportCredentials: false
       }
       appSettings: [
