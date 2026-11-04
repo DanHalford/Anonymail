@@ -33,7 +33,7 @@ Write-Step 'Cost controls'
 $budget = Invoke-Az consumption budget list --resource-group $rg
 Check 'Budget alert exists' (@($budget).Count -gt 0) "(alerts notify; they do not cap spend)"
 $ws = Invoke-Az resource list -g $rg --resource-type Microsoft.OperationalInsights/workspaces
-$wsd = Invoke-Az resource show --ids $ws[0].id
+$wsd = Invoke-Az resource show --ids @($ws)[0].id # @(): a one-item list comes back unwrapped
 Check 'Log daily cap set' ($wsd.properties.workspaceCapping.dailyQuotaGb -gt 0) "($($wsd.properties.workspaceCapping.dailyQuotaGb) GB/day)"
 Check 'Log retention <= 31 days' ($wsd.properties.retentionInDays -le 31)
 $settings = Invoke-Az functionapp config appsettings list -n $state.functionAppName -g $rg
@@ -45,7 +45,8 @@ foreach ($k in 'MAX_CREATIONS_PER_MONTH', 'WORKER_JOBS_HARD_LIMIT_PER_MONTH', 'W
 Write-Step 'Worker'
 $rb = Invoke-Az automation runbook show -g $rg --automation-account-name $state.automationAccountName -n $state.runbookName
 Check 'Runbook published' ($rb.state -eq 'Published')
-$mod = Invoke-Az resource show -g $rg --resource-type Microsoft.Automation/automationAccounts/modules -n "$($state.automationAccountName)/ExchangeOnlineManagement"
+$mod = Invoke-Az resource show -g $rg --namespace Microsoft.Automation --parent "automationAccounts/$($state.automationAccountName)" `
+    --resource-type modules -n ExchangeOnlineManagement
 Check 'ExchangeOnlineManagement module imported' ($mod.properties.provisioningState -eq 'Succeeded')
 $exoRoles = (Invoke-Graph GET "/servicePrincipals/$($state.automationPrincipalId)/appRoleAssignments").value
 Check 'Exchange.ManageAsApp granted' (@($exoRoles).Count -gt 0)
